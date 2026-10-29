@@ -1,0 +1,23 @@
+# Web API & Server
+fastapi>=0.111.0
+uvicorn[standard]>=0.30.0
+
+# Multi-Agent Framework & LLM
+langgraph>=0.1.8
+langchain>=0.2.6
+langchain-openai>=0.1.14
+openai>=1.35.0
+pydantic>=2.8.0
+pydantic-settings>=2.3.0
+
+# Database & ORM
+sqlalchemy>=2.0.31
+aiosqlite>=0.20.0
+
+# Data Science / Forecasting (for medicine shortage prediction)
+pandas>=2.2.2
+numpy>=1.26.0
+
+# Utilities & Env
+python-dotenv>=1.0.1
+rich>=13.7.1
