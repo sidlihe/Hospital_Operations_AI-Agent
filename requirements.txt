@@ -10,6 +10,8 @@ openai>=1.35.0
 pydantic>=2.8.0
 pydantic-settings>=2.3.0
 
+langchain-groq
+
 # Database & ORM
 sqlalchemy>=2.0.31
 aiosqlite>=0.20.0
