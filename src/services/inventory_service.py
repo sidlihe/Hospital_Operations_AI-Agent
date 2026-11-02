@@ -2,6 +2,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.models.db_models import Medicine
 from src.models.schemas import MedicineShortagePrediction
+from src.core.logger import get_logger
+
+logger = get_logger(__name__)
 
 class InventoryService:
     @staticmethod
@@ -26,6 +29,9 @@ class InventoryService:
                     is_shortage_critical=is_critical
                 )
             )
+        critical_count = sum(prediction.is_shortage_critical for prediction in predictions)
+        if critical_count:
+            logger.warning("Inventory forecast found %d critical shortage(s)", critical_count)
         return predictions
 
     @staticmethod
@@ -34,11 +40,13 @@ class InventoryService:
         med = (await session.execute(query)).scalar_one_or_none()
         
         if not med:
+            logger.warning("Medicine restock failed: item not found")
             return {"success": False, "message": f"Medicine {medicine_name} not found"}
 
         med.stock_quantity += quantity
         await session.commit()
         await session.refresh(med)
+        logger.info("Medicine inventory restocked")
         return {
             "success": True,
             "medicine": med.name,

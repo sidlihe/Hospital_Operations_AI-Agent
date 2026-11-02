@@ -2,6 +2,9 @@ from datetime import datetime
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.models.db_models import Doctor, Appointment, AppointmentStatus
+from src.core.logger import get_logger
+
+logger = get_logger(__name__)
 
 class DoctorService:
     @staticmethod
@@ -11,7 +14,7 @@ class DoctorService:
             query = query.where(Doctor.specialty.ilike(f"%{specialty}%"))
         
         result = await session.execute(query)
-        doctors = result.scalars().all()
+        doctors = result.scalars().all() 
         return [
             {
                 "id": doc.id,
@@ -39,6 +42,7 @@ class DoctorService:
         )
         existing = (await session.execute(query)).scalar_one_or_none()
         if existing:
+            logger.warning("Appointment booking rejected because the requested slot is occupied")
             return {"success": False, "message": "Doctor already booked at this time slot."}
 
         appointment = Appointment(
@@ -50,8 +54,43 @@ class DoctorService:
         session.add(appointment)
         await session.commit()
         await session.refresh(appointment)
+        logger.info("Appointment scheduled")
         return {
             "success": True,
             "appointment_id": appointment.id,
             "start_time": appointment.start_time.isoformat()
         }
+
+if __name__ == "__main__":
+    import asyncio
+    from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+    from sqlalchemy.orm import sessionmaker
+    from src.config import settings
+    from datetime import timedelta
+
+    DATABASE_URL = settings.DATABASE_URL
+
+    engine = create_async_engine(DATABASE_URL, echo=settings.SQL_ECHO)
+    async_session = sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+
+    async def test_doctor_service():
+        async with async_session() as session:
+            # Test getting available doctors
+            doctors = await DoctorService.get_available_doctors(session, specialty="Cardiology")
+            logger.info("Available doctors found: %d", len(doctors))
+
+            # Test scheduling an appointment
+            if doctors:
+                doctor_id = doctors[0]["id"]
+                patient_id = 1  # Example patient ID
+                start_time = datetime.now() + timedelta(days=1)  # Example future time
+                booking_result = await DoctorService.schedule_appointment(session, doctor_id, patient_id, start_time)
+                logger.info("Appointment booking completed (success=%s)", booking_result["success"])
+
+    async def run():
+        try:
+            await test_doctor_service()
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())

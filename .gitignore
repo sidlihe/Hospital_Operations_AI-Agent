@@ -2,3 +2,7 @@ venv/
 .ssh/
 data/
 *.pyc
+.env
+frontend/
+test.db
+

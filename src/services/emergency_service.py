@@ -35,7 +35,16 @@ class EmergencyService:
                 "immediate_action": "Assign standard triage queue"
             }
 
-        # Level 4/5: Non-urgent
+        # Level 4: Semi-urgent
+        if any(w in text for w in ["minor sprain", "minor cut", "mild rash", "sore throat", "earache", "minor burn", "minor wound"]):
+            return {
+                "priority": PriorityLevel.LEVEL_4_SEMI_URGENT,
+                "recommended_bed": BedType.GENERAL,
+                "recommended_specialty": "General Medicine",
+                "immediate_action": "Semi-urgent assessment after higher-acuity patients"
+            }
+
+        # Level 5: Non-urgent
         return {
             "priority": PriorityLevel.LEVEL_5_NON_URGENT,
             "recommended_bed": BedType.GENERAL,
