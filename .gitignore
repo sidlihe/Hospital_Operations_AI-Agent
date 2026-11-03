@@ -3,6 +3,5 @@ venv/
 data/
 *.pyc
 .env
-frontend/
 test.db
 
