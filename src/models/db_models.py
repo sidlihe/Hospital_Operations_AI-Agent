@@ -79,6 +79,20 @@ class Medicine(Base):
     minimum_threshold: Mapped[int] = mapped_column(Integer, default=20)
     unit_price: Mapped[float] = mapped_column(Float, default=0.0)
 
+    stock_movements = relationship("InventoryTransaction", back_populates="medicine")
+
+
+class InventoryTransaction(Base):
+    __tablename__ = "inventory_transactions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    medicine_id: Mapped[int] = mapped_column(Integer, ForeignKey("medicines.id"), nullable=False)
+    quantity_change: Mapped[int] = mapped_column(Integer, nullable=False)
+    reason: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    medicine = relationship("Medicine", back_populates="stock_movements")
+
 
 # Upgraded Patient entity with MRN, Phone, Email
 class Patient(Base):

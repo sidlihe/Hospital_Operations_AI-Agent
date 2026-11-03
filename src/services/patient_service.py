@@ -1,12 +1,24 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import select, or_
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.models.db_models import Patient, Consultation, PriorityLevel, EncounterType
 from src.core.logger import logger
 
 
 class PatientService:
+    @staticmethod
+    def _normalize_phone(phone: str) -> str:
+        return "".join(character for character in phone if character.isdigit())
+
+    @staticmethod
+    def _name_matches(requested_name: str, registered_name: str) -> bool:
+        requested = " ".join(requested_name.casefold().split())
+        registered = " ".join(registered_name.casefold().split())
+        if requested in registered or registered in requested:
+            return True
+        return bool(set(requested.split()) & set(registered.split()))
+
     @staticmethod
     async def get_or_create_patient(
         session: AsyncSession,
@@ -17,21 +29,64 @@ class PatientService:
         gender: str = "Not Specified"
     ) -> tuple[Patient, bool]:
         """
-        Deduplicates patients by phone OR email.
-        If exists -> returns existing record.
-        If new -> generates unique MRN and saves to DB.
+        Matches known patients by normalized phone and email plus a partial name.
+        A new record is created only when neither contact value exists in the registry.
         """
+        name = " ".join(name.split())
+        normalized_phone = PatientService._normalize_phone(phone)
+        normalized_email = email.strip().casefold()
+        if len(normalized_phone) < 7 or len(normalized_phone) > 15:
+            raise ValueError("A valid mobile number containing 7-15 digits is required.")
+        if not name or len(name) > 100:
+            raise ValueError("A valid patient name is required.")
+        if "@" not in normalized_email or "." not in normalized_email.rsplit("@", 1)[-1]:
+            raise ValueError("A valid email address is required.")
+        stored_phone = Patient.phone
+        normalized_stored_phone = func.replace(
+            func.replace(
+                func.replace(
+                    func.replace(
+                        func.replace(
+                            func.replace(stored_phone, "+", ""),
+                            "-", "",
+                        ),
+                        " ",
+                        "",
+                    ),
+                    "(",
+                    "",
+                ),
+                ")",
+                "",
+            ),
+            ".",
+            "",
+        )
         query = select(Patient).where(
             or_(
-                Patient.phone == phone.strip(),
-                Patient.email == email.strip().lower()
+                normalized_stored_phone == normalized_phone,
+                func.lower(Patient.email) == normalized_email,
             )
         )
-        existing = (await session.execute(query)).scalar_one_or_none()
-        
-        if existing:
-            logger.info(f"[PatientService] Existing patient identified: MRN={existing.mrn} | Name={existing.name}")
-            return existing, False
+        candidates = (await session.execute(query)).scalars().all()
+
+        if candidates:
+            matching_patients = [
+                candidate
+                for candidate in candidates
+                if PatientService._normalize_phone(candidate.phone) == normalized_phone
+                and candidate.email.strip().casefold() == normalized_email
+                and PatientService._name_matches(name, candidate.name)
+            ]
+            if len(matching_patients) == 1:
+                existing = matching_patients[0]
+                logger.info("Patient registry identity matched (patient_id=%s)", existing.id)
+                return existing, False
+
+            logger.warning("Patient registry identity mismatch rejected")
+            raise ValueError(
+                "The supplied name, mobile number, and email do not match one patient record."
+            )
 
         # Generate unique hospital MRN (e.g. MRN-2026-A1B2)
         new_mrn = f"MRN-{datetime.utcnow().year}-{uuid.uuid4().hex[:6].upper()}"
@@ -39,7 +94,7 @@ class PatientService:
             mrn=new_mrn,
             name=name.strip(),
             phone=phone.strip(),
-            email=email.strip().lower(),
+            email=normalized_email,
             age=age,
             gender=gender,
             priority=PriorityLevel.LEVEL_5_NON_URGENT
@@ -48,7 +103,7 @@ class PatientService:
         await session.commit()
         await session.refresh(patient)
 
-        logger.info(f"[PatientService] Created new patient: MRN={patient.mrn} | Name={patient.name}")
+        logger.info("New patient registration completed (patient_id=%s)", patient.id)
         return patient, True
 
     @staticmethod

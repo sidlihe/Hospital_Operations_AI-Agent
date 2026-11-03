@@ -1,7 +1,9 @@
 from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.database import get_db
@@ -11,7 +13,7 @@ from src.services.emergency_service import EmergencyService
 from src.services.bed_service import BedService
 from src.services.doctor_service import DoctorService
 from src.services.inventory_service import InventoryService
-from src.models.db_models import BedType
+from src.models.db_models import Bed, BedType, InventoryTransaction
 
 router = APIRouter()
 
@@ -20,10 +22,10 @@ router = APIRouter()
 # MAIN AI MULTI-AGENT ORCHESTRATION DISPATCH ENDPOINT
 # -------------------------------------------------------------
 class OrchestratorRequest(BaseModel):
-    name: str = "Anonymous Patient"
-    phone: str = "+1-555-0100"
-    email: str = "patient@hospital.org"
-    age: Optional[int] = 35
+    name: str = Field(min_length=2, max_length=100)
+    phone: str = Field(min_length=7, max_length=20)
+    email: str = Field(min_length=3, max_length=120)
+    age: Optional[int] = Field(default=35, ge=0, le=120)
     gender: Optional[str] = "Not Specified"
     query: str
     symptoms: Optional[str] = ""
@@ -40,14 +42,17 @@ async def dispatch_request(req: OrchestratorRequest, session: AsyncSession = Dep
     3. Persists consultation, triage score, and clinical orders in DB.
     4. Returns patient-friendly natural language + clinical trace.
     """
-    patient, is_new = await PatientService.get_or_create_patient(
-        session=session,
-        name=req.name,
-        phone=req.phone,
-        email=req.email,
-        age=req.age or 30,
-        gender=req.gender or "Not Specified"
-    )
+    try:
+        patient, is_new = await PatientService.get_or_create_patient(
+            session=session,
+            name=req.name,
+            phone=req.phone,
+            email=req.email,
+            age=req.age if req.age is not None else 30,
+            gender=req.gender or "Not Specified"
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
 
     initial_state = {
         "session": session,
@@ -86,24 +91,27 @@ async def dispatch_request(req: OrchestratorRequest, session: AsyncSession = Dep
 # 1. PATIENT SERVICE ENDPOINTS
 # -------------------------------------------------------------
 class PatientRegisterRequest(BaseModel):
-    name: str
-    phone: str
-    email: str
-    age: Optional[int] = 30
+    name: str = Field(min_length=2, max_length=100)
+    phone: str = Field(min_length=7, max_length=20)
+    email: str = Field(min_length=3, max_length=120)
+    age: Optional[int] = Field(default=30, ge=0, le=120)
     gender: Optional[str] = "Not Specified"
 
 
 @router.post("/patients/register", tags=["1. Patient Service"])
 async def register_or_get_patient(req: PatientRegisterRequest, session: AsyncSession = Depends(get_db)):
     """Resolves identity by Phone/Email. Creates unique MRN if new, returns existing if found."""
-    patient, is_new = await PatientService.get_or_create_patient(
-        session=session,
-        name=req.name,
-        phone=req.phone,
-        email=req.email,
-        age=req.age or 30,
-        gender=req.gender or "Not Specified"
-    )
+    try:
+        patient, is_new = await PatientService.get_or_create_patient(
+            session=session,
+            name=req.name,
+            phone=req.phone,
+            email=req.email,
+            age=req.age if req.age is not None else 30,
+            gender=req.gender or "Not Specified"
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     return {
         "status": "created" if is_new else "existing_found",
         "is_new_patient": is_new,
@@ -113,6 +121,8 @@ async def register_or_get_patient(req: PatientRegisterRequest, session: AsyncSes
             "name": patient.name,
             "phone": patient.phone,
             "email": patient.email,
+            "age": patient.age,
+            "gender": patient.gender,
             "priority": patient.priority.value
         }
     }
@@ -154,7 +164,6 @@ class BedAllocateRequest(BaseModel):
 
 
 @router.get("/beds/breakdown", tags=["3. Bed Service"])
-@router.get("/beds/status", tags=["3. Bed Service"])  # Alias for frontend
 async def get_bed_breakdown(session: AsyncSession = Depends(get_db)):
     counts = await BedService.get_bed_counts(session)
     return {"beds": counts}
@@ -188,9 +197,8 @@ class ScheduleAppointmentRequest(BaseModel):
 
 
 @router.get("/doctors/roster", tags=["4. Doctor Service"])
-@router.get("/doctors/on-duty", tags=["4. Doctor Service"])  # Alias for frontend
 async def get_doctors_roster(specialty: Optional[str] = None, session: AsyncSession = Depends(get_db)):
-    docs = await DoctorService.get_available_doctors(session, specialty)
+    docs = await DoctorService.get_doctor_roster(session, specialty)
     return {"count": len(docs), "doctors": docs}
 
 
@@ -201,7 +209,9 @@ async def schedule_consultation(req: ScheduleAppointmentRequest, session: AsyncS
         session, req.doctor_id, req.patient_id, req.start_time
     )
     if not result.get("success"):
-        raise HTTPException(status_code=409, detail=result.get("message"))
+        message = result.get("message")
+        status_code = 404 if message in {"Doctor not found.", "Patient not found."} else 409
+        raise HTTPException(status_code=status_code, detail=message)
     return result
 
 
@@ -210,12 +220,24 @@ async def schedule_consultation(req: ScheduleAppointmentRequest, session: AsyncS
 # -------------------------------------------------------------
 class RestockRequest(BaseModel):
     medicine_name: str
-    quantity: int
+    quantity: int = Field(gt=0)
+
+
+class InventoryAdjustmentRequest(BaseModel):
+    medicine_name: str = Field(min_length=1, max_length=150)
+    quantity_change: int
+    reason: str = Field(min_length=3, max_length=200)
+
+
+class DoctorAvailabilityRequest(BaseModel):
+    is_on_duty: bool
 
 
 @router.get("/inventory/predict-shortages", tags=["5. Inventory Service"])
-@router.get("/inventory/shortages", tags=["5. Inventory Service"])  # Alias for frontend
-async def predict_shortages(threshold_days: float = Query(3.0), session: AsyncSession = Depends(get_db)):
+async def predict_shortages(
+    threshold_days: float = Query(default=3.0, ge=0, le=365),
+    session: AsyncSession = Depends(get_db),
+):
     predictions = await InventoryService.predict_shortages(session, days_threshold=threshold_days)
     return {
         "critical_count": sum(1 for p in predictions if p.is_shortage_critical),
@@ -226,7 +248,88 @@ async def predict_shortages(threshold_days: float = Query(3.0), session: AsyncSe
 @router.post("/inventory/restock", tags=["5. Inventory Service"])
 async def restock_medicine(req: RestockRequest, session: AsyncSession = Depends(get_db)):
     """Restocks a medicine quantity in the pharmacy database."""
-    result = await InventoryService.restock_medicine(session, req.medicine_name, req.quantity)
+    result = await InventoryService.adjust_stock(
+        session,
+        req.medicine_name,
+        req.quantity,
+        "Purchase order receipt",
+    )
     if not result.get("success"):
-        raise HTTPException(status_code=404, detail=result.get("message"))
+        raise HTTPException(status_code=404 if "not found" in result.get("message", "").lower() else 409, detail=result.get("message"))
     return result
+
+
+@router.post("/inventory/adjustments", tags=["5. Inventory Service"])
+async def adjust_inventory_stock(
+    req: InventoryAdjustmentRequest,
+    session: AsyncSession = Depends(get_db),
+):
+    """Records a stock receipt or usage adjustment with an operational reason."""
+    if req.quantity_change == 0:
+        raise HTTPException(status_code=422, detail="Quantity change must not be zero.")
+
+    result = await InventoryService.adjust_stock(
+        session,
+        req.medicine_name,
+        req.quantity_change,
+        req.reason,
+    )
+    if not result.get("success"):
+        raise HTTPException(
+            status_code=404 if "not found" in result.get("message", "").lower() else 409,
+            detail=result.get("message"),
+        )
+    return result
+
+# -------------------------------------------------------------
+# 5. ADMIN PORTAL ENDPOINTS (FOR INTERNAL HOSPITAL MANAGEMENT)
+# -------------------------------------------------------------
+
+@router.get("/admin/beds", tags=["Admin Portal"])
+async def get_all_beds_detailed(session: AsyncSession = Depends(get_db)):
+    result = await session.execute(select(Bed))
+    beds = result.scalars().all()
+    return [
+        {
+            "id": b.id,
+            "room_number": b.room_number,
+            "bed_type": b.bed_type.value,
+            "status": b.status.value,
+            "assigned_patient_id": b.assigned_patient_id
+        }
+        for b in beds
+    ]
+
+@router.patch("/admin/doctors/{doctor_id}/availability", tags=["Admin Portal"])
+async def set_doctor_availability(
+    doctor_id: int,
+    req: DoctorAvailabilityRequest,
+    session: AsyncSession = Depends(get_db),
+):
+    doctor = await DoctorService.set_doctor_availability(session, doctor_id, req.is_on_duty)
+    if not doctor:
+        raise HTTPException(status_code=404, detail="Doctor not found")
+    return {"success": True, "doctor": doctor}
+
+
+@router.get("/admin/inventory/transactions", tags=["Admin Portal"])
+async def get_inventory_transactions(
+    limit: int = Query(default=10, ge=1, le=50),
+    session: AsyncSession = Depends(get_db),
+):
+    result = await session.execute(
+        select(InventoryTransaction)
+        .options(selectinload(InventoryTransaction.medicine))
+        .order_by(InventoryTransaction.created_at.desc())
+        .limit(limit)
+    )
+    return [
+        {
+            "id": transaction.id,
+            "medicine": transaction.medicine.name,
+            "quantity_change": transaction.quantity_change,
+            "reason": transaction.reason,
+            "created_at": transaction.created_at.isoformat(),
+        }
+        for transaction in result.scalars().all()
+    ]

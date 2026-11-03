@@ -1,14 +1,19 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
-from src.models.db_models import Doctor, Appointment, AppointmentStatus
+from src.models.db_models import Appointment, AppointmentStatus, Doctor, Patient
 from src.core.logger import logger
 
 
 class DoctorService:
     @staticmethod
     async def get_available_doctors(session: AsyncSession, specialty: str | None = None) -> list[dict]:
-        query = select(Doctor).where(Doctor.is_on_duty == True)
+        doctors = await DoctorService.get_doctor_roster(session, specialty)
+        return [doctor for doctor in doctors if doctor["is_on_duty"]]
+
+    @staticmethod
+    async def get_doctor_roster(session: AsyncSession, specialty: str | None = None) -> list[dict]:
+        query = select(Doctor)
         if specialty:
             query = query.where(Doctor.specialty.ilike(f"%{specialty}%"))
         
@@ -19,10 +24,32 @@ class DoctorService:
                 "id": doc.id,
                 "name": doc.name,
                 "specialty": doc.specialty,
-                "shift": f"{doc.shift_start} - {doc.shift_end}"
+                "shift": f"{doc.shift_start} - {doc.shift_end}",
+                "is_on_duty": doc.is_on_duty,
             }
             for doc in doctors
         ]
+
+    @staticmethod
+    async def set_doctor_availability(
+        session: AsyncSession,
+        doctor_id: int,
+        is_on_duty: bool,
+    ) -> dict | None:
+        doctor = await session.get(Doctor, doctor_id)
+        if not doctor:
+            return None
+
+        doctor.is_on_duty = is_on_duty
+        await session.commit()
+        await session.refresh(doctor)
+        logger.info("Doctor availability updated (doctor_id=%s, is_on_duty=%s)", doctor_id, is_on_duty)
+        return {
+            "id": doctor.id,
+            "name": doctor.name,
+            "specialty": doctor.specialty,
+            "is_on_duty": doctor.is_on_duty,
+        }
 
     @staticmethod
     async def schedule_appointment(
@@ -31,6 +58,19 @@ class DoctorService:
         patient_id: int,
         start_time: datetime
     ) -> dict:
+        if start_time.tzinfo is not None:
+            start_time = start_time.astimezone(timezone.utc).replace(tzinfo=None)
+        if start_time <= datetime.utcnow():
+            return {"success": False, "message": "Appointment time must be in the future."}
+
+        doctor = await session.get(Doctor, doctor_id)
+        if not doctor:
+            return {"success": False, "message": "Doctor not found."}
+        if not doctor.is_on_duty:
+            return {"success": False, "message": "Doctor is off duty and cannot be scheduled."}
+        if not await session.get(Patient, patient_id):
+            return {"success": False, "message": "Patient not found."}
+
         # Check collision
         query = select(Appointment).where(
             and_(

@@ -1,6 +1,6 @@
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from src.models.db_models import Medicine
+from src.models.db_models import InventoryTransaction, Medicine
 from src.models.schemas import MedicineShortagePrediction
 from src.core.logger import logger
 
@@ -33,20 +33,50 @@ class InventoryService:
         return predictions
 
     @staticmethod
-    async def restock_medicine(session: AsyncSession, medicine_name: str, quantity: int) -> dict:
+    async def adjust_stock(
+        session: AsyncSession,
+        medicine_name: str,
+        quantity_change: int,
+        reason: str,
+    ) -> dict:
+        normalized_reason = reason.strip()
+        if not normalized_reason:
+            return {"success": False, "message": "A stock adjustment reason is required."}
+
         query = select(Medicine).where(Medicine.name.ilike(medicine_name))
         med = (await session.execute(query)).scalar_one_or_none()
         
         if not med:
-            logger.warning("Medicine restock failed: item not found")
+            logger.warning("Medicine stock adjustment failed: item not found")
             return {"success": False, "message": f"Medicine {medicine_name} not found"}
 
-        med.stock_quantity += quantity
+        adjusted_stock = med.stock_quantity + quantity_change
+        if adjusted_stock < 0:
+            logger.warning("Medicine stock adjustment rejected: insufficient stock")
+            return {
+                "success": False,
+                "message": f"Insufficient stock for {med.name}. Available: {med.stock_quantity}.",
+            }
+
+        med.stock_quantity = adjusted_stock
+        session.add(
+            InventoryTransaction(
+                medicine_id=med.id,
+                quantity_change=quantity_change,
+                reason=normalized_reason,
+            )
+        )
         await session.commit()
         await session.refresh(med)
-        logger.info("Medicine inventory restocked")
+        logger.info(
+            "Medicine stock adjusted (medicine_id=%s, quantity_change=%s)",
+            med.id,
+            quantity_change,
+        )
         return {
             "success": True,
             "medicine": med.name,
-            "new_stock": med.stock_quantity
+            "new_stock": med.stock_quantity,
+            "quantity_change": quantity_change,
+            "reason": normalized_reason,
         }
