@@ -2,11 +2,14 @@ from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.agents.base import BaseAgent, AgentResponse
 from src.services.doctor_service import DoctorService
+from src.services.patient_service import PatientService
+from src.models.db_models import EncounterType, PriorityLevel
+from src.core.logger import logger
 
 APPOINTMENT_PROMPT = """
-You are the Hospital Appointment Agent.
-Your job is to match patient consultation requests to the best available physician based on specialty, shifts, and schedules.
-Provide a clear, patient-friendly confirmation and schedule summary.
+You are the Hospital Appointment Coordinator.
+Generate a clear, polite, and reassuring appointment confirmation message for the patient.
+Include the doctor's name, specialty, confirmed date/time, and pre-visit instructions (e.g. arrive 15 minutes early, bring previous medical records).
 """
 
 class AppointmentAgent(BaseAgent):
@@ -20,10 +23,11 @@ class AppointmentAgent(BaseAgent):
         specialty: str,
         preferred_time: datetime
     ) -> AgentResponse:
-        doctors = await DoctorService.get_available_doctors(session, specialty=specialty)
+        logger.info(f"[AppointmentAgent] Booking request for patient_id={patient_id}, specialty='{specialty}'")
         
+        # 1. Match physician by specialty
+        doctors = await DoctorService.get_available_doctors(session, specialty=specialty)
         if not doctors:
-            # Fallback to any on-duty doctor
             doctors = await DoctorService.get_available_doctors(session)
 
         if not doctors:
@@ -32,10 +36,12 @@ class AppointmentAgent(BaseAgent):
                 status="failed",
                 action_taken="NO_DOCTOR_AVAILABLE",
                 details={},
-                summary_message="No physicians currently on duty matching requirements."
+                summary_message="Currently no physicians available on duty for the requested department."
             )
 
         selected_doctor = doctors[0]
+        
+        # 2. Book appointment slot
         booking = await DoctorService.schedule_appointment(
             session=session,
             doctor_id=selected_doctor["id"],
@@ -52,8 +58,25 @@ class AppointmentAgent(BaseAgent):
                 summary_message=booking["message"]
             )
 
-        ai_summary = await self.execute_prompt(
-            f"Scheduled patient {patient_id} with {selected_doctor['name']} ({selected_doctor['specialty']}) at {preferred_time.isoformat()}."
+        # 3. Generate patient-friendly confirmation
+        summary = await self.execute_prompt(
+            f"Doctor: {selected_doctor['name']} ({selected_doctor['specialty']})\n"
+            f"Scheduled Time: {preferred_time.strftime('%A, %B %d, %Y at %I:%M %p')}\n"
+            f"Appointment Reference: #{booking['appointment_id']}"
+        )
+
+        # 4. Save to consultations table as an encounter
+        await PatientService.record_consultation(
+            session=session,
+            patient_id=patient_id,
+            doctor_id=selected_doctor["id"],
+            encounter_type=EncounterType.OUTPATIENT_CONSULT,
+            symptoms="Scheduled Outpatient Consultation",
+            vitals="Pending at Check-in",
+            triage_priority=PriorityLevel.LEVEL_5_NON_URGENT,
+            decision_log=f"Booked appointment with {selected_doctor['name']}",
+            patient_summary=summary,
+            orders=f"Consultation scheduled for {preferred_time.isoformat()}"
         )
 
         return AgentResponse(
@@ -65,5 +88,5 @@ class AppointmentAgent(BaseAgent):
                 "specialty": selected_doctor["specialty"],
                 "start_time": preferred_time.isoformat()
             },
-            summary_message=ai_summary
+            summary_message=summary
         )

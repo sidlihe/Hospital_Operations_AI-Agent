@@ -1,12 +1,12 @@
 import asyncio
 from src.core.database import init_db, AsyncSessionLocal
-from src.models.db_models import Doctor, Bed, BedType, BedStatus, Medicine
+from src.models.db_models import Doctor, Bed, BedType, BedStatus, Medicine, Patient, PriorityLevel
 
 
 async def seed():
     await init_db()
     async with AsyncSessionLocal() as session:
-        # 1. Seed Doctors
+        # 1. Doctors
         doctors = [
             Doctor(name="Dr. Sarah Smith", specialty="Cardiology", shift_start="08:00", shift_end="16:00", is_on_duty=True),
             Doctor(name="Dr. James Patel", specialty="Emergency Medicine", shift_start="00:00", shift_end="23:59", is_on_duty=True),
@@ -14,7 +14,7 @@ async def seed():
         ]
         session.add_all(doctors)
 
-        # 2. Seed Beds
+        # 2. Beds
         beds = [
             Bed(room_number="ICU-101", bed_type=BedType.ICU, status=BedStatus.AVAILABLE),
             Bed(room_number="ICU-102", bed_type=BedType.ICU, status=BedStatus.AVAILABLE),
@@ -24,7 +24,7 @@ async def seed():
         ]
         session.add_all(beds)
 
-        # 3. Seed Medicines
+        # 3. Medicines
         medicines = [
             Medicine(name="Epinephrine", stock_quantity=15, burn_rate_per_day=5.0, minimum_threshold=25, unit_price=20.0),
             Medicine(name="Amoxicillin", stock_quantity=120, burn_rate_per_day=10.0, minimum_threshold=30, unit_price=5.5),
@@ -32,8 +32,19 @@ async def seed():
         ]
         session.add_all(medicines)
 
+        # 4. Seed a Sample Patient
+        sample_patient = Patient(
+            mrn="MRN-2026-INIT01",
+            name="John Doe",
+            age=45,
+            phone="+1-555-0199",
+            email="johndoe@example.com",
+            priority=PriorityLevel.LEVEL_5_NON_URGENT
+        )
+        session.add(sample_patient)
+
         await session.commit()
-        print("Database initialized and mock hospital resources seeded successfully!")
+        print("Database re-initialized with MRN, Consultations, and Patient deduplication schemas!")
 
 
 if __name__ == "__main__":

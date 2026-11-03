@@ -4,8 +4,13 @@ from src.models.db_models import Bill
 from src.core.logger import logger
 
 BILLING_PROMPT = """
-You are the Hospital Billing & Finance Agent.
-Format the hospital bill clearly, indicating service charges, insurance adjustment estimates (default 80% coverage for insured patients), and patient out-of-pocket balance.
+You are the Hospital Billing & Finance Officer.
+Format an itemized statement breakdown clearly:
+- Itemized charges (Ward, Clinical Consult, Diagnostics/Meds)
+- Insurance coverage adjustment (80% for insured patients)
+- Out-of-pocket balance due
+- Payment instructions
+Be transparent, professional, and courteous.
 """
 
 class BillingAgent(BaseAgent):
@@ -20,7 +25,8 @@ class BillingAgent(BaseAgent):
         bed_type: str = "GENERAL",
         has_insurance: bool = True
     ) -> AgentResponse:
-        # Standard rate card
+        logger.info(f"[BillingAgent] Generating bill for patient_id={patient_id}, bed_type='{bed_type}'")
+
         rate_card = {
             "ICU": 1500.0,
             "EMERGENCY": 800.0,
@@ -37,23 +43,23 @@ class BillingAgent(BaseAgent):
         insurance_covered = (gross_total * 0.8) if has_insurance else 0.0
         patient_copay = gross_total - insurance_covered
 
-        # Persist bill
+        # Persist to database
         bill = Bill(
             patient_id=patient_id,
             total_amount=patient_copay,
             is_paid=False,
-            details=f"Bed ({bed_type} x {bed_days}d): ${room_charge}, Consult: ${consultation_charge}, Meds: ${medication_base}. Insurance covered: ${insurance_covered}"
+            details=f"Ward ({bed_type} x {bed_days}d): ${room_charge:.2f}, Consult: ${consultation_charge:.2f}, Pharmacy: ${medication_base:.2f}. Ins covered: ${insurance_covered:.2f}"
         )
         session.add(bill)
         await session.commit()
         await session.refresh(bill)
-        logger.info("Bill generated")
 
-        prompt_input = (
-            f"Gross Total: ${gross_total}, Insurance Coverage: ${insurance_covered}, "
-            f"Patient Responsibility: ${patient_copay}, Bill ID: {bill.id}."
+        summary = await self.execute_prompt(
+            f"Invoice #{bill.id}: Room ({bed_type} x {bed_days} days) = ${room_charge}, "
+            f"Physician Consult = ${consultation_charge}, Pharmacy/Supplies = ${medication_base}. "
+            f"Gross Total = ${gross_total}. Insurance Applied (80%) = ${insurance_covered}. "
+            f"Patient Responsibility = ${patient_copay}."
         )
-        ai_summary = await self.execute_prompt(prompt_input)
 
         return AgentResponse(
             agent_name=self.name,
@@ -64,5 +70,5 @@ class BillingAgent(BaseAgent):
                 "insurance_covered": insurance_covered,
                 "patient_copay": patient_copay
             },
-            summary_message=ai_summary
+            summary_message=summary
         )
