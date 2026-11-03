@@ -1,9 +1,7 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.agents.base import BaseAgent, AgentResponse
 from src.models.db_models import Bill
-from src.core.logger import get_logger
-
-logger = get_logger(__name__)
+from src.core.logger import logger
 
 BILLING_PROMPT = """
 You are the Hospital Billing & Finance Agent.

@@ -1,7 +1,6 @@
 from src.agents.base import BaseAgent, AgentResponse
-from src.core.logger import get_logger
+from src.core.logger import logger
 
-logger = get_logger(__name__)
 
 PATIENT_INTAKE_PROMPT = """
 You are the Patient Intake & Front-Desk Agent.

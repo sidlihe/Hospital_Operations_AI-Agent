@@ -2,9 +2,8 @@ from datetime import datetime
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.models.db_models import Doctor, Appointment, AppointmentStatus
-from src.core.logger import get_logger
+from src.core.logger import logger
 
-logger = get_logger(__name__)
 
 class DoctorService:
     @staticmethod

@@ -1,9 +1,7 @@
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.models.db_models import Bed, BedType, BedStatus
-from src.core.logger import get_logger
-
-logger = get_logger(__name__)
+from src.core.logger import logger
 
 class BedService:
     @staticmethod

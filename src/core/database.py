@@ -2,9 +2,8 @@ import os
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import DeclarativeBase
 from src.config import settings
-from src.core.logger import get_logger
+from src.core.logger import logger
 
-logger = get_logger(__name__)
 
 # Ensure data directory exists
 os.makedirs("data", exist_ok=True)

@@ -3,9 +3,8 @@ from pydantic import BaseModel, Field
 from langchain_core.messages import SystemMessage
 from langchain_core.prompts import ChatPromptTemplate
 from src.core.llm import get_llm
-from src.core.logger import get_logger
+from src.core.logger import logger
 
-logger = get_logger(__name__)
 
 class AgentResponse(BaseModel):
     agent_name: str

@@ -2,9 +2,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.models.db_models import Medicine
 from src.models.schemas import MedicineShortagePrediction
-from src.core.logger import get_logger
-
-logger = get_logger(__name__)
+from src.core.logger import logger
 
 class InventoryService:
     @staticmethod
